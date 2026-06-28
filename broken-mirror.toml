@@ -1,0 +1,24 @@
+# broken-mirror configuration.
+#
+# Loaded from ./broken-mirror.toml by default, or from the path given to --config.
+# CLI flags (--addr, --upstream, --token) override the matching values here.
+
+# Listen address. Loopback by default — binding to a public interface shares
+# your token's read access with anyone who can reach the port.
+addr = "127.0.0.1:8080"
+
+# Upstream git host to proxy to.
+upstream = "https://github.com"
+
+# Upstream PAT. Leave empty (recommended) to resolve it at startup from
+# GH_TOKEN, then GITHUB_TOKEN, then `gh auth token`.
+# token = "ghp_xxx"
+
+# Repositories that may be PUSHED TO (git-receive-pack). Everything not listed
+# here is read-only. Entries must be explicit "OWNER/REPO" names — NO wildcards
+# (a "*", "?", or bare owner is rejected at startup). Leave empty for a fully
+# read-only proxy.
+write_allow = [
+  # "Tener/accresys",
+  # "myorg/deploy-config",
+]

@@ -1,0 +1,57 @@
+# broken-mirror
+
+A tiny **read-only git proxy**. Point `git` at `http://localhost:8080/OWNER/REPO`
+and it transparently clones from GitHub, authenticating with your `gh` CLI token.
+Every repo your token can read is available; pushes are refused unless the repo
+is on an explicit allowlist.
+
+## How it works
+
+Git's smart-HTTP protocol has two services per repo: `git-upload-pack` (read:
+clone/fetch) and `git-receive-pack` (write: push). `broken-mirror` reverse-proxies
+to `github.com` and:
+
+- **Defaults to read-only** — returns `403` for any `git-receive-pack` request
+  unless the target repo is in `write_allow`.
+- **Injects credentials** — GitHub rejects `Authorization: Bearer`, so the proxy
+  sends HTTP Basic auth (`x-access-token:<token>`). The token only goes upstream,
+  never to the git client.
+- **Passes paths through** — any repo the token can reach works, no per-repo setup.
+
+## Build & run
+
+```sh
+go build -o broken-mirror .
+./broken-mirror                       # read-only, loopback :8080
+
+git clone http://127.0.0.1:8080/OWNER/REPO   # clone anything your token can read
+curl  http://127.0.0.1:8080/_repos           # list accessible repos
+curl  http://127.0.0.1:8080/healthz          # liveness
+```
+
+## Configuration
+
+Settings live in `broken-mirror.toml` (or `--config <path>`). CLI flags
+(`--addr`, `--upstream`, `--token`) override the file.
+
+```toml
+addr     = "127.0.0.1:8080"
+upstream = "https://github.com"
+# token  = "ghp_xxx"          # optional; default: GH_TOKEN, GITHUB_TOKEN, then `gh auth token`
+
+# Repos that may be PUSHED TO. Everything else is read-only.
+# Explicit "OWNER/REPO" only — no wildcards.
+write_allow = [
+  # "Tener/accresys",
+]
+```
+
+`write_allow` is the only way to permit pushes. Entries are matched
+case-insensitively; wildcards, globs, and bare owners are rejected at startup.
+
+## Security
+
+- **Bind to loopback.** A public bind shares your token's read access with anyone
+  who can reach the port.
+- The proxy never forwards a client's `Authorization`; it always supplies its own.
+- Keep `write_allow` as small as you mean it.
