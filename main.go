@@ -61,7 +61,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	proxy := newGitProxy(upstreamURL, tokens.get, cfg.ReadAllow, cfg.WriteAllow, log)
+	proxy := newGitProxy(upstreamURL, tokens.get, cfg.ReadAllow, cfg.WriteAllow, cfg.WritePolicy, log)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +81,7 @@ func main() {
 		"upstream", upstreamURL.String(),
 		"readable", readScopeString(cfg.ReadAllow),
 		"writable", writeScopeString(cfg.WriteAllow),
+		"push_refs", writePolicyString(cfg.WritePolicy),
 	)
 	fmt.Fprintf(os.Stderr, "\n  Clone a repo:  git clone http://%s/OWNER/REPO\n  List repos:    http://%s/_repos\n\n", cfg.Addr, cfg.Addr)
 
@@ -119,6 +120,22 @@ func writeScopeString(writeAllow []string) string {
 	return strings.Join(writeAllow, ", ")
 }
 
+// writePolicyString describes the ref-level write policy.
+func writePolicyString(wp *WritePolicy) string {
+	if wp == nil {
+		return "any ref"
+	}
+	branches := "(none)"
+	if len(wp.Branches) > 0 {
+		branches = strings.Join(wp.Branches, "|")
+	}
+	tags := "(none)"
+	if len(wp.Tags) > 0 {
+		tags = strings.Join(wp.Tags, "|")
+	}
+	return fmt.Sprintf("branches=%s tags=%s", branches, tags)
+}
+
 // landingOrProxy serves a plain-text usage page at "/" and proxies everything
 // else (the git smart-HTTP repo paths) to the upstream.
 func landingOrProxy(proxy http.Handler, upstream *url.URL, cfg Config) http.HandlerFunc {
@@ -128,8 +145,12 @@ func landingOrProxy(proxy http.Handler, upstream *url.URL, cfg Config) http.Hand
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintf(w, "broken-mirror %s\nupstream: %s\nreadable: %s\nwritable: %s\n\n",
+		fmt.Fprintf(w, "broken-mirror %s\nupstream: %s\nreadable: %s\nwritable: %s\n",
 			version, upstream.String(), readScopeString(cfg.ReadAllow), writeScopeString(cfg.WriteAllow))
+		if len(cfg.WriteAllow) > 0 {
+			fmt.Fprintf(w, "push refs: %s\n", writePolicyString(cfg.WritePolicy))
+		}
+		fmt.Fprint(w, "\n")
 		fmt.Fprintf(w, "Clone:  git clone http://%s/OWNER/REPO\n", cfg.Addr)
 		fmt.Fprintf(w, "Repos:  http://%s/_repos\n", cfg.Addr)
 		fmt.Fprintf(w, "Health: http://%s/healthz\n", cfg.Addr)

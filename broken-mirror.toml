@@ -31,3 +31,13 @@ write_allow = [
   # "Tener/accresys",
   # "myorg/deploy-config",
 ]
+
+# Optional ref-level policy applied to every writable repo. When the
+# [write_policy] table is present, a push is allowed only if every ref it
+# updates matches a pattern below: branch names (the part after refs/heads/)
+# against `branches`, tag names against `tags`. Glob patterns allowed. An empty
+# (or omitted) list for a ref type denies that type — use ["*"] to allow all.
+# Remove the table entirely to impose no ref-level restriction.
+# [write_policy]
+# branches = ["main", "release/*"]
+# tags     = ["v*"]

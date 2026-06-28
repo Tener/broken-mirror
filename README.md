@@ -62,6 +62,24 @@ The two are independent gates — reads check `read_allow`, pushes check
 `write_allow`. If you narrow `read_allow`, make sure any writable repos are still
 within it so they remain cloneable.
 
+### Ref-level write policy
+
+An optional `[write_policy]` table restricts *which refs* a push may update,
+across all writable repos:
+
+```toml
+[write_policy]
+branches = ["main", "release/*"]   # allowed branch names (after refs/heads/)
+tags     = ["v*"]                  # allowed tag names (after refs/tags/)
+```
+
+A push is allowed only if **every** ref it updates matches — branch names against
+`branches`, tag names against `tags` (globs, case-insensitive). An empty/omitted
+list for a ref type denies that type (use `["*"]` to allow all); any other ref
+namespace is denied. Omit the whole table for no ref-level restriction. The proxy
+inspects the `git-receive-pack` request to enforce this and fails closed if it
+can't parse the push.
+
 ## Security
 
 - **Bind to loopback.** A public bind shares your token's read access with anyone

@@ -25,6 +25,19 @@ type Config struct {
 	// WriteAllow is the explicit list of "OWNER/REPO" names that may be pushed
 	// to. Everything else is read-only. No wildcards.
 	WriteAllow []string `toml:"write_allow"`
+	// WritePolicy, when set, restricts which refs a push may update across all
+	// writable repos. A nil pointer (no [write_policy] table) means no ref-level
+	// restriction.
+	WritePolicy *WritePolicy `toml:"write_policy"`
+}
+
+// WritePolicy restricts pushes to refs whose name matches the given glob
+// patterns. branches patterns are matched against branch names (the part after
+// "refs/heads/") and tags against tag names ("refs/tags/"). An empty list for a
+// ref type denies that type entirely; use ["*"] to allow all.
+type WritePolicy struct {
+	Branches []string `toml:"branches"`
+	Tags     []string `toml:"tags"`
 }
 
 func defaultConfig() Config {
@@ -66,7 +79,29 @@ func loadConfig(path string) (Config, error) {
 	if err := validateWriteAllow(cfg.WriteAllow); err != nil {
 		return cfg, fmt.Errorf("config %s: %w", path, err)
 	}
+	if err := validateWritePolicy(cfg.WritePolicy); err != nil {
+		return cfg, fmt.Errorf("config %s: %w", path, err)
+	}
 	return cfg, nil
+}
+
+// validateWritePolicy checks that branch/tag patterns are non-empty strings.
+// Globs are allowed, so the rules are intentionally light.
+func validateWritePolicy(wp *WritePolicy) error {
+	if wp == nil {
+		return nil
+	}
+	for _, group := range []struct {
+		name     string
+		patterns []string
+	}{{"branches", wp.Branches}, {"tags", wp.Tags}} {
+		for _, p := range group.patterns {
+			if strings.TrimSpace(p) == "" {
+				return fmt.Errorf("write_policy.%s contains an empty pattern", group.name)
+			}
+		}
+	}
+	return nil
 }
 
 // validateReadAllow checks that each read_allow pattern is non-empty. Wildcards

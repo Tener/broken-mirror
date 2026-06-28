@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -19,6 +23,7 @@ type gitProxy struct {
 	token      func() string // resolved per request so rotation is picked up
 	readAllow  *repoMatcher
 	writeAllow map[string]bool // lowercased "owner/repo" -> allowed
+	refPolicy  *refPolicy      // nil => no ref-level restriction
 	log        *slog.Logger
 	rp         *httputil.ReverseProxy
 }
@@ -41,12 +46,13 @@ func newWriteAllowSet(list []string) map[string]bool {
 	return set
 }
 
-func newGitProxy(upstream *url.URL, token func() string, readAllow, writeAllow []string, log *slog.Logger) *gitProxy {
+func newGitProxy(upstream *url.URL, token func() string, readAllow, writeAllow []string, writePolicy *WritePolicy, log *slog.Logger) *gitProxy {
 	p := &gitProxy{
 		upstream:   upstream,
 		token:      token,
 		readAllow:  newRepoMatcher(readAllow),
 		writeAllow: newWriteAllowSet(writeAllow),
+		refPolicy:  newRefPolicy(writePolicy),
 		log:        log,
 	}
 	p.rp = &httputil.ReverseProxy{
@@ -108,6 +114,13 @@ func (p *gitProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "broken-mirror: read-only proxy — this repo is not in write_allow", http.StatusForbidden)
 			return
 		}
+		if p.refPolicy != nil && isReceivePackData(r) {
+			if reason, ok := p.enforceRefPolicy(r); !ok {
+				p.log.Warn("rejected push by write_policy", "path", r.URL.Path, "repo", full, "reason", reason)
+				http.Error(w, "broken-mirror: "+reason, http.StatusForbidden)
+				return
+			}
+		}
 	} else if !p.readAllow.match(full) {
 		p.log.Warn("rejected read request", "method", r.Method, "path", r.URL.Path, "repo", full)
 		http.Error(w, "broken-mirror: this repo is not in read_allow", http.StatusForbidden)
@@ -115,4 +128,62 @@ func (p *gitProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.rp.ServeHTTP(w, r)
+}
+
+// isReceivePackData reports whether r carries the actual push data (the
+// ref-update commands and packfile), as opposed to the ref advertisement.
+func isReceivePackData(r *http.Request) bool {
+	return r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/git-receive-pack")
+}
+
+// enforceRefPolicy parses the receive-pack request, checks every updated ref
+// against the policy, and rebuilds r.Body so the upstream still receives the
+// full original request. It fails closed: any parse error denies the push.
+func (p *gitProxy) enforceRefPolicy(r *http.Request) (reason string, ok bool) {
+	cmds, err := p.readReceivePackCommands(r)
+	if err != nil {
+		p.log.Warn("could not parse receive-pack request", "err", err, "path", r.URL.Path)
+		return "could not parse push request for write_policy enforcement", false
+	}
+	for _, c := range cmds {
+		if !p.refPolicy.allow(c.ref) {
+			return fmt.Sprintf("push to %q is not permitted by write_policy", c.ref), false
+		}
+	}
+	return "", true
+}
+
+// rewindBody re-presents an already-partially-read request body by replaying a
+// consumed prefix ahead of the remaining stream, preserving the original Close.
+type rewindBody struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (b rewindBody) Close() error { return b.closer.Close() }
+
+// readReceivePackCommands extracts the ref-update commands from r and leaves
+// r.Body able to deliver the complete original request to the upstream. The
+// uncompressed case streams (only the small command section is buffered); a
+// gzip-encoded body is buffered whole, which is rare for receive-pack.
+func (p *gitProxy) readReceivePackCommands(r *http.Request) ([]refUpdate, error) {
+	if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
+		raw, err := io.ReadAll(r.Body)
+		r.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		r.Body = io.NopCloser(bytes.NewReader(raw)) // forward original compressed bytes
+		zr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return nil, err
+		}
+		cmds, _, err := parseReceivePackCommands(zr)
+		return cmds, err
+	}
+
+	orig := r.Body
+	cmds, consumed, err := parseReceivePackCommands(orig)
+	r.Body = rewindBody{io.MultiReader(bytes.NewReader(consumed), orig), orig}
+	return cmds, err
 }

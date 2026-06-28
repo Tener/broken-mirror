@@ -15,8 +15,6 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func staticToken(t string) func() string { return func() string { return t } }
-
 func TestBasicAuthHeader(t *testing.T) {
 	got := basicAuthHeader("secret-token")
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:secret-token"))
@@ -72,11 +70,18 @@ func TestRepoFullName(t *testing.T) {
 // pointers recording whether the upstream was hit and the auth header it saw.
 func newTestProxy(t *testing.T, readAllow, writeAllow []string) (http.Handler, *bool, *string) {
 	t.Helper()
+	return newTestProxyPolicy(t, readAllow, writeAllow, nil)
+}
+
+func newTestProxyPolicy(t *testing.T, readAllow, writeAllow []string, wp *WritePolicy) (http.Handler, *bool, *string) {
+	t.Helper()
 	var upstreamHit bool
 	var gotAuth string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHit = true
 		gotAuth = r.Header.Get("Authorization")
+		// Drain the body so streaming/rebuilt request bodies are exercised.
+		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusOK)
 		io.WriteString(w, "upstream-ok:"+r.URL.Path)
 	}))
@@ -86,8 +91,10 @@ func newTestProxy(t *testing.T, readAllow, writeAllow []string) (http.Handler, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newGitProxy(u, staticToken("tok123"), readAllow, writeAllow, testLogger()), &upstreamHit, &gotAuth
+	return newGitProxy(u, staticToken("tok123"), readAllow, writeAllow, wp, testLogger()), &upstreamHit, &gotAuth
 }
+
+func staticToken(t string) func() string { return func() string { return t } }
 
 func TestProxyRejectsPushForUnlistedRepo(t *testing.T) {
 	// owner/repo is NOT in the allowlist.
@@ -200,5 +207,79 @@ func TestProxyReadFilterRejectsNonMatch(t *testing.T) {
 	}
 	if *hit {
 		t.Fatal("upstream contacted for a repo outside read_allow")
+	}
+}
+
+func TestProxyWritePolicyAllowsMatchingBranch(t *testing.T) {
+	wp := &WritePolicy{Branches: []string{"main"}}
+	proxy, hit, _ := newTestProxyPolicy(t, nil, []string{"owner/repo"}, wp)
+
+	body := receivePackBody(cmd(zeroOID, oneOID, "refs/heads/main"))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/owner/repo/git-receive-pack", strings.NewReader(body))
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !*hit {
+		t.Fatalf("status=%d hit=%v, want 200 and forwarded", rec.Code, *hit)
+	}
+}
+
+func TestProxyWritePolicyRejectsBranch(t *testing.T) {
+	wp := &WritePolicy{Branches: []string{"main"}}
+	proxy, hit, _ := newTestProxyPolicy(t, nil, []string{"owner/repo"}, wp)
+
+	body := receivePackBody(cmd(zeroOID, oneOID, "refs/heads/forbidden"))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/owner/repo/git-receive-pack", strings.NewReader(body))
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 for branch outside write_policy", rec.Code)
+	}
+	if *hit {
+		t.Fatal("upstream contacted for a policy-rejected push")
+	}
+}
+
+func TestProxyWritePolicyAllowsAdvertisement(t *testing.T) {
+	// The receive-pack ref advertisement carries no commands, so policy is not
+	// applied; it must pass through for a writable repo.
+	wp := &WritePolicy{Branches: []string{"main"}}
+	proxy, hit, _ := newTestProxyPolicy(t, nil, []string{"owner/repo"}, wp)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/owner/repo/info/refs?service=git-receive-pack", nil)
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !*hit {
+		t.Fatalf("status=%d hit=%v, want advertisement forwarded", rec.Code, *hit)
+	}
+}
+
+func TestProxyWritePolicyForwardsFullBody(t *testing.T) {
+	// The rebuilt request body must reach the upstream byte-for-byte identical.
+	var got []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wp := &WritePolicy{Branches: []string{"main"}}
+	proxy := newGitProxy(u, staticToken("tok123"), nil, []string{"owner/repo"}, wp, testLogger())
+
+	body := receivePackBody(cmd(zeroOID, oneOID, "refs/heads/main"))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/owner/repo/git-receive-pack", strings.NewReader(body))
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", rec.Code)
+	}
+	if string(got) != body {
+		t.Fatalf("upstream body mismatch:\n got = %q\nwant = %q", got, body)
 	}
 }

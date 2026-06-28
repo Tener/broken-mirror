@@ -28,6 +28,21 @@ func newRepoMatcher(patterns []string) *repoMatcher {
 	return m
 }
 
+// newRefMatcher is like newRepoMatcher but treats an empty pattern set as
+// "match nothing" (deny) rather than "match everything". This fits the write
+// policy, where an unspecified branch/tag list denies that ref type. Use "*"
+// to allow all.
+func newRefMatcher(patterns []string) *repoMatcher {
+	m := &repoMatcher{}
+	for _, p := range patterns {
+		if p == "*" {
+			m.all = true
+		}
+		m.res = append(m.res, globToRegexp(p))
+	}
+	return m
+}
+
 func (m *repoMatcher) match(fullName string) bool {
 	if m.all {
 		return true
