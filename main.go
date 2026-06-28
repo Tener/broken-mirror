@@ -67,7 +67,7 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	mux.HandleFunc("/_repos", reposHandler(log))
+	mux.HandleFunc("/_repos", reposHandler(proxy))
 	mux.Handle("/", landingOrProxy(proxy, upstreamURL, cfg))
 
 	srv := &http.Server{
