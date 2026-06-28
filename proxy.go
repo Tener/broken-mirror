@@ -10,12 +10,14 @@ import (
 )
 
 // gitProxy reverse-proxies git smart-HTTP requests to an upstream git host
-// (github.com by default), injecting HTTP Basic auth derived from a PAT. Reads
-// are always allowed; a push (git-receive-pack) is allowed only for repos in the
+// (github.com by default), injecting HTTP Basic auth derived from a PAT. A read
+// (git-upload-pack) is allowed when the repo matches the readAllow patterns
+// (default: all). A push (git-receive-pack) is allowed only for repos in the
 // explicit writeAllow set — everything else is read-only.
 type gitProxy struct {
 	upstream   *url.URL
 	authHeader string
+	readAllow  *repoMatcher
 	writeAllow map[string]bool // lowercased "owner/repo" -> allowed
 	log        *slog.Logger
 	rp         *httputil.ReverseProxy
@@ -39,10 +41,11 @@ func newWriteAllowSet(list []string) map[string]bool {
 	return set
 }
 
-func newGitProxy(upstream *url.URL, token string, writeAllow []string, log *slog.Logger) *gitProxy {
+func newGitProxy(upstream *url.URL, token string, readAllow, writeAllow []string, log *slog.Logger) *gitProxy {
 	p := &gitProxy{
 		upstream:   upstream,
 		authHeader: basicAuthHeader(token),
+		readAllow:  newRepoMatcher(readAllow),
 		writeAllow: newWriteAllowSet(writeAllow),
 		log:        log,
 	}
@@ -86,22 +89,29 @@ func repoFullName(path string) (string, bool) {
 	return owner + "/" + repo, true
 }
 
-// writeAllowed reports whether the repo targeted by r is in the explicit
-// write allowlist.
-func (p *gitProxy) writeAllowed(r *http.Request) bool {
-	full, ok := repoFullName(r.URL.Path)
-	if !ok {
-		return false
-	}
-	return p.writeAllow[strings.ToLower(full)]
+// writeAllowed reports whether fullName is in the explicit write allowlist.
+func (p *gitProxy) writeAllowed(fullName string) bool {
+	return p.writeAllow[strings.ToLower(fullName)]
 }
 
 func (p *gitProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if isWriteRequest(r) && !p.writeAllowed(r) {
-		full, _ := repoFullName(r.URL.Path)
-		p.log.Warn("rejected write request", "method", r.Method, "path", r.URL.Path, "repo", full)
-		http.Error(w, "broken-mirror: read-only proxy — this repo is not in write_allow", http.StatusForbidden)
+	full, ok := repoFullName(r.URL.Path)
+	if !ok {
+		http.Error(w, "broken-mirror: could not determine repository from request path", http.StatusBadRequest)
 		return
 	}
+
+	if isWriteRequest(r) {
+		if !p.writeAllowed(full) {
+			p.log.Warn("rejected write request", "method", r.Method, "path", r.URL.Path, "repo", full)
+			http.Error(w, "broken-mirror: read-only proxy — this repo is not in write_allow", http.StatusForbidden)
+			return
+		}
+	} else if !p.readAllow.match(full) {
+		p.log.Warn("rejected read request", "method", r.Method, "path", r.URL.Path, "repo", full)
+		http.Error(w, "broken-mirror: this repo is not in read_allow", http.StatusForbidden)
+		return
+	}
+
 	p.rp.ServeHTTP(w, r)
 }

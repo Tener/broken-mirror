@@ -61,14 +61,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	proxy := newGitProxy(upstreamURL, token, cfg.WriteAllow, log)
+	proxy := newGitProxy(upstreamURL, token, cfg.ReadAllow, cfg.WriteAllow, log)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/_repos", reposHandler(log))
-	mux.Handle("/", landingOrProxy(proxy, upstreamURL, cfg.Addr, cfg.WriteAllow))
+	mux.Handle("/", landingOrProxy(proxy, upstreamURL, cfg))
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
@@ -79,8 +79,8 @@ func main() {
 	log.Info("broken-mirror starting",
 		"addr", cfg.Addr,
 		"upstream", upstreamURL.String(),
-		"mode", modeString(cfg.WriteAllow),
-		"write_allow", cfg.WriteAllow,
+		"readable", readScopeString(cfg.ReadAllow),
+		"writable", writeScopeString(cfg.WriteAllow),
 	)
 	fmt.Fprintf(os.Stderr, "\n  Clone a repo:  git clone http://%s/OWNER/REPO\n  List repos:    http://%s/_repos\n\n", cfg.Addr, cfg.Addr)
 
@@ -103,30 +103,36 @@ func main() {
 	}
 }
 
-// modeString describes the access mode for logs and the landing page.
-func modeString(writeAllow []string) string {
-	if len(writeAllow) == 0 {
-		return "READ-ONLY (all repos)"
+// readScopeString describes the read filter for logs and the landing page.
+func readScopeString(readAllow []string) string {
+	if len(readAllow) == 0 {
+		return "all repos (*)"
 	}
-	return fmt.Sprintf("READ-ONLY except %d writable repo(s)", len(writeAllow))
+	return strings.Join(readAllow, ", ")
+}
+
+// writeScopeString describes the write allowlist for logs and the landing page.
+func writeScopeString(writeAllow []string) string {
+	if len(writeAllow) == 0 {
+		return "none (read-only)"
+	}
+	return strings.Join(writeAllow, ", ")
 }
 
 // landingOrProxy serves a plain-text usage page at "/" and proxies everything
 // else (the git smart-HTTP repo paths) to the upstream.
-func landingOrProxy(proxy http.Handler, upstream *url.URL, addr string, writeAllow []string) http.HandlerFunc {
+func landingOrProxy(proxy http.Handler, upstream *url.URL, cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			proxy.ServeHTTP(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintf(w, "broken-mirror %s — %s\nupstream: %s\n\n", version, modeString(writeAllow), upstream.String())
-		fmt.Fprintf(w, "Clone:  git clone http://%s/OWNER/REPO\n", addr)
-		fmt.Fprintf(w, "Repos:  http://%s/_repos\n", addr)
-		fmt.Fprintf(w, "Health: http://%s/healthz\n", addr)
-		if len(writeAllow) > 0 {
-			fmt.Fprintf(w, "\nWritable repos (push allowed):\n  %s\n", strings.Join(writeAllow, "\n  "))
-		}
+		fmt.Fprintf(w, "broken-mirror %s\nupstream: %s\nreadable: %s\nwritable: %s\n\n",
+			version, upstream.String(), readScopeString(cfg.ReadAllow), writeScopeString(cfg.WriteAllow))
+		fmt.Fprintf(w, "Clone:  git clone http://%s/OWNER/REPO\n", cfg.Addr)
+		fmt.Fprintf(w, "Repos:  http://%s/_repos\n", cfg.Addr)
+		fmt.Fprintf(w, "Health: http://%s/healthz\n", cfg.Addr)
 	}
 }
 

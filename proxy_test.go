@@ -68,7 +68,7 @@ func TestRepoFullName(t *testing.T) {
 
 // newTestProxy wires a gitProxy to a stub upstream and returns the handler plus
 // pointers recording whether the upstream was hit and the auth header it saw.
-func newTestProxy(t *testing.T, writeAllow []string) (http.Handler, *bool, *string) {
+func newTestProxy(t *testing.T, readAllow, writeAllow []string) (http.Handler, *bool, *string) {
 	t.Helper()
 	var upstreamHit bool
 	var gotAuth string
@@ -84,12 +84,12 @@ func newTestProxy(t *testing.T, writeAllow []string) (http.Handler, *bool, *stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newGitProxy(u, "tok123", writeAllow, testLogger()), &upstreamHit, &gotAuth
+	return newGitProxy(u, "tok123", readAllow, writeAllow, testLogger()), &upstreamHit, &gotAuth
 }
 
 func TestProxyRejectsPushForUnlistedRepo(t *testing.T) {
 	// owner/repo is NOT in the allowlist.
-	proxy, hit, _ := newTestProxy(t, []string{"someone/else"})
+	proxy, hit, _ := newTestProxy(t, nil, []string{"someone/else"})
 
 	for _, target := range []string{
 		"/owner/repo/info/refs?service=git-receive-pack",
@@ -109,7 +109,7 @@ func TestProxyRejectsPushForUnlistedRepo(t *testing.T) {
 }
 
 func TestProxyForwardsUploadPackWithAuth(t *testing.T) {
-	proxy, hit, gotAuth := newTestProxy(t, nil)
+	proxy, hit, gotAuth := newTestProxy(t, nil, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/owner/repo/info/refs?service=git-upload-pack", nil)
@@ -131,7 +131,7 @@ func TestProxyForwardsUploadPackWithAuth(t *testing.T) {
 
 func TestProxyAllowsPushForListedRepo(t *testing.T) {
 	// owner/repo IS in the allowlist (case-insensitive match).
-	proxy, hit, _ := newTestProxy(t, []string{"Owner/Repo"})
+	proxy, hit, _ := newTestProxy(t, nil, []string{"Owner/Repo"})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/owner/repo/git-receive-pack", strings.NewReader(""))
@@ -147,7 +147,7 @@ func TestProxyAllowsPushForListedRepo(t *testing.T) {
 
 func TestProxyPushIsolation(t *testing.T) {
 	// A listed repo must not grant push to a different, unlisted repo.
-	proxy, hit, _ := newTestProxy(t, []string{"owner/allowed"})
+	proxy, hit, _ := newTestProxy(t, nil, []string{"owner/allowed"})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/owner/other/git-receive-pack", strings.NewReader(""))
@@ -158,5 +158,45 @@ func TestProxyPushIsolation(t *testing.T) {
 	}
 	if *hit {
 		t.Fatal("upstream contacted for an unlisted repo push")
+	}
+}
+
+func TestProxyReadFilterDefaultsToAll(t *testing.T) {
+	// No read patterns => everything readable.
+	proxy, hit, _ := newTestProxy(t, nil, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/any/repo/info/refs?service=git-upload-pack", nil)
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !*hit {
+		t.Fatalf("status=%d hit=%v, want 200 and upstream contacted", rec.Code, *hit)
+	}
+}
+
+func TestProxyReadFilterAllowsMatch(t *testing.T) {
+	proxy, hit, _ := newTestProxy(t, []string{"Owner/*"}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/owner/anything/info/refs?service=git-upload-pack", nil)
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !*hit {
+		t.Fatalf("status=%d hit=%v, want 200 (matches Owner/*)", rec.Code, *hit)
+	}
+}
+
+func TestProxyReadFilterRejectsNonMatch(t *testing.T) {
+	proxy, hit, _ := newTestProxy(t, []string{"owner/*"}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/other/repo/info/refs?service=git-upload-pack", nil)
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 for repo outside read_allow", rec.Code)
+	}
+	if *hit {
+		t.Fatal("upstream contacted for a repo outside read_allow")
 	}
 }

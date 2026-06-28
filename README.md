@@ -39,6 +39,12 @@ addr     = "127.0.0.1:8080"
 upstream = "https://github.com"
 # token  = "ghp_xxx"          # optional; default: GH_TOKEN, GITHUB_TOKEN, then `gh auth token`
 
+# Repos that may be READ. Glob patterns allowed ("*", "OWNER/*", "*/NAME").
+# Empty/absent = every repo your token can reach (the default).
+read_allow = [
+  # "Tener/*",
+]
+
 # Repos that may be PUSHED TO. Everything else is read-only.
 # Explicit "OWNER/REPO" only — no wildcards.
 write_allow = [
@@ -46,8 +52,15 @@ write_allow = [
 ]
 ```
 
-`write_allow` is the only way to permit pushes. Entries are matched
-case-insensitively; wildcards, globs, and bare owners are rejected at startup.
+- **`read_allow`** filters which repos can be cloned/fetched. It accepts glob
+  patterns (`*` matches any characters including `/`, `?` matches one); matching
+  is case-insensitive. Leave it empty to allow everything.
+- **`write_allow`** is the only way to permit pushes. Entries are matched
+  case-insensitively; wildcards, globs, and bare owners are rejected at startup.
+
+The two are independent gates — reads check `read_allow`, pushes check
+`write_allow`. If you narrow `read_allow`, make sure any writable repos are still
+within it so they remain cloneable.
 
 ## Security
 

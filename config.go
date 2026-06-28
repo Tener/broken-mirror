@@ -18,6 +18,10 @@ type Config struct {
 	// Token optionally pins the upstream PAT. If empty, it is resolved from
 	// GH_TOKEN / GITHUB_TOKEN / `gh auth token` at startup.
 	Token string `toml:"token"`
+	// ReadAllow is a list of glob patterns ("OWNER/REPO", "OWNER/*", "*") naming
+	// the repos that may be read (cloned/fetched). Empty/absent means all repos
+	// the token can reach. Wildcards are allowed.
+	ReadAllow []string `toml:"read_allow"`
 	// WriteAllow is the explicit list of "OWNER/REPO" names that may be pushed
 	// to. Everything else is read-only. No wildcards.
 	WriteAllow []string `toml:"write_allow"`
@@ -56,10 +60,24 @@ func loadConfig(path string) (Config, error) {
 	if _, err := toml.Decode(string(data), &cfg); err != nil {
 		return cfg, fmt.Errorf("parsing config %s: %w", path, err)
 	}
+	if err := validateReadAllow(cfg.ReadAllow); err != nil {
+		return cfg, fmt.Errorf("config %s: %w", path, err)
+	}
 	if err := validateWriteAllow(cfg.WriteAllow); err != nil {
 		return cfg, fmt.Errorf("config %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// validateReadAllow checks that each read_allow pattern is non-empty. Wildcards
+// are allowed here (unlike write_allow), so the rules are intentionally light.
+func validateReadAllow(list []string) error {
+	for _, e := range list {
+		if strings.TrimSpace(e) == "" {
+			return fmt.Errorf("read_allow contains an empty pattern")
+		}
+	}
+	return nil
 }
 
 // validateWriteAllow enforces that every write_allow entry is an explicit

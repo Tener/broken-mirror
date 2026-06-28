@@ -14,6 +14,15 @@ upstream = "https://github.com"
 # GH_TOKEN, then GITHUB_TOKEN, then `gh auth token`.
 # token = "ghp_xxx"
 
+# Repositories that may be READ (cloned/fetched). Glob patterns are allowed:
+# "*" matches everything, "OWNER/*" matches all repos under an owner, "*/NAME"
+# matches a repo name under any owner. Leave empty/absent to allow every repo
+# your token can reach (the default).
+read_allow = [
+  # "*",
+  # "Tener/*",
+]
+
 # Repositories that may be PUSHED TO (git-receive-pack). Everything not listed
 # here is read-only. Entries must be explicit "OWNER/REPO" names — NO wildcards
 # (a "*", "?", or bare owner is rejected at startup). Leave empty for a fully
