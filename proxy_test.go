@@ -15,6 +15,8 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func staticToken(t string) func() string { return func() string { return t } }
+
 func TestBasicAuthHeader(t *testing.T) {
 	got := basicAuthHeader("secret-token")
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:secret-token"))
@@ -84,7 +86,7 @@ func newTestProxy(t *testing.T, readAllow, writeAllow []string) (http.Handler, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newGitProxy(u, "tok123", readAllow, writeAllow, testLogger()), &upstreamHit, &gotAuth
+	return newGitProxy(u, staticToken("tok123"), readAllow, writeAllow, testLogger()), &upstreamHit, &gotAuth
 }
 
 func TestProxyRejectsPushForUnlistedRepo(t *testing.T) {

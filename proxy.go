@@ -16,7 +16,7 @@ import (
 // explicit writeAllow set — everything else is read-only.
 type gitProxy struct {
 	upstream   *url.URL
-	authHeader string
+	token      func() string // resolved per request so rotation is picked up
 	readAllow  *repoMatcher
 	writeAllow map[string]bool // lowercased "owner/repo" -> allowed
 	log        *slog.Logger
@@ -41,10 +41,10 @@ func newWriteAllowSet(list []string) map[string]bool {
 	return set
 }
 
-func newGitProxy(upstream *url.URL, token string, readAllow, writeAllow []string, log *slog.Logger) *gitProxy {
+func newGitProxy(upstream *url.URL, token func() string, readAllow, writeAllow []string, log *slog.Logger) *gitProxy {
 	p := &gitProxy{
 		upstream:   upstream,
-		authHeader: basicAuthHeader(token),
+		token:      token,
 		readAllow:  newRepoMatcher(readAllow),
 		writeAllow: newWriteAllowSet(writeAllow),
 		log:        log,
@@ -56,8 +56,9 @@ func newGitProxy(upstream *url.URL, token string, readAllow, writeAllow []string
 			// host in the Host header so virtual-hosted backends (github.com)
 			// resolve the repo correctly.
 			r.Out.Host = upstream.Host
-			// We supply our own credentials; never forward a client's.
-			r.Out.Header.Set("Authorization", p.authHeader)
+			// We supply our own credentials (resolved fresh, to pick up token
+			// rotation); never forward a client's.
+			r.Out.Header.Set("Authorization", basicAuthHeader(p.token()))
 		},
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}

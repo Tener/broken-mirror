@@ -55,13 +55,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	token, err := resolveToken(cfg.Token)
+	tokens, err := newTokenProvider(cfg.Token, tokenRefreshInterval, log)
 	if err != nil {
 		log.Error("could not resolve token", "err", err)
 		os.Exit(1)
 	}
 
-	proxy := newGitProxy(upstreamURL, token, cfg.ReadAllow, cfg.WriteAllow, log)
+	proxy := newGitProxy(upstreamURL, tokens.get, cfg.ReadAllow, cfg.WriteAllow, log)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
