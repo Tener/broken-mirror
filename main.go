@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +23,7 @@ func main() {
 	addr := flag.String("addr", "", "override listen address from config")
 	upstream := flag.String("upstream", "", "override upstream git host from config")
 	tokenFlag := flag.String("token", "", "override PAT from config (else GH_TOKEN/GITHUB_TOKEN/`gh auth token`)")
+	stateFile := flag.String("state-file", "", "if set, write a JSON runtime state file (pid + bound addr) here; removed on graceful shutdown")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -76,20 +78,40 @@ func main() {
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 
+	ln, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		log.Error("listen", "addr", cfg.Addr, "err", err)
+		os.Exit(1)
+	}
+	actualAddr := ln.Addr().String()
+
+	if *stateFile != "" {
+		st := State{
+			PID: os.Getpid(), Addr: actualAddr, Upstream: upstreamURL.String(),
+			ReadAllow: cfg.ReadAllow, WriteAllow: cfg.WriteAllow,
+			StartedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+		if err := writeState(*stateFile, st); err != nil {
+			log.Error("write state file", "path", *stateFile, "err", err)
+			os.Exit(1)
+		}
+		defer removeState(*stateFile)
+	}
+
 	log.Info("broken-mirror starting",
-		"addr", cfg.Addr,
+		"addr", actualAddr,
 		"upstream", upstreamURL.String(),
 		"readable", readScopeString(cfg.ReadAllow),
 		"writable", writeScopeString(cfg.WriteAllow),
 		"push_refs", writePolicyString(cfg.WritePolicy),
 	)
-	fmt.Fprintf(os.Stderr, "\n  Clone a repo:  git clone http://%s/OWNER/REPO\n  List repos:    http://%s/_repos\n\n", cfg.Addr, cfg.Addr)
+	fmt.Fprintf(os.Stderr, "\n  Clone a repo:  git clone http://%s/OWNER/REPO\n  List repos:    http://%s/_repos\n\n", actualAddr, actualAddr)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server error", "err", err)
 			stop()
 		}
