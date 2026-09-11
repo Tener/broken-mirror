@@ -18,6 +18,20 @@ import (
 
 const version = "0.1.0"
 
+// disclaimerBanner is printed at startup and served on the landing page. This
+// is an experimental tool: it carries a broad GitHub token, has no client
+// authentication, and its allowlists are unaudited filters rather than a
+// security boundary.
+const disclaimerBanner = `  ############################################################
+  #  EXPERIMENTAL SOFTWARE - DO NOT USE IN PRODUCTION        #
+  #                                                          #
+  #  No client auth. No TLS. Holds a broad GitHub token.     #
+  #  Allowlists are best-effort filters, NOT a security      #
+  #  boundary, and have not been audited. Bind to loopback   #
+  #  only. Provided AS IS, WITHOUT WARRANTY OF ANY KIND;     #
+  #  you run it entirely at your own risk.                   #
+  ############################################################`
+
 func main() {
 	cfgPath := flag.String("config", "", "path to TOML config file (default: ./broken-mirror.toml if present)")
 	addr := flag.String("addr", "", "override listen address from config")
@@ -105,6 +119,7 @@ func main() {
 		"writable", writeScopeString(cfg.WriteAllow),
 		"push_refs", writePolicyString(cfg.WritePolicy),
 	)
+	fmt.Fprint(os.Stderr, "\n"+disclaimerBanner+"\n")
 	fmt.Fprintf(os.Stderr, "\n  Clone a repo:  git clone http://%s/OWNER/REPO\n  List repos:    http://%s/_repos\n\n", actualAddr, actualAddr)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -167,6 +182,7 @@ func landingOrProxy(proxy http.Handler, upstream *url.URL, cfg Config) http.Hand
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprint(w, disclaimerBanner+"\n\n")
 		fmt.Fprintf(w, "broken-mirror %s\nupstream: %s\nreadable: %s\nwritable: %s\n",
 			version, upstream.String(), readScopeString(cfg.ReadAllow), writeScopeString(cfg.WriteAllow))
 		if len(cfg.WriteAllow) > 0 {

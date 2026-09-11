@@ -1,5 +1,24 @@
 # broken-mirror
 
+> ## ⚠️ EXPERIMENTAL — NOT FOR PRODUCTION ⚠️
+>
+> **This is a toy/experimental project. Do not run it in production, do not run
+> it on a network anyone else can reach, and do not rely on it as a security
+> boundary.**
+>
+> - It holds a **GitHub token with all of your read access** and injects it into
+>   every upstream request. Anyone who can reach the port effectively has that
+>   access.
+> - Its allowlists (`read_allow`, `write_allow`, `[write_policy]`) are
+>   **best-effort filters, not a hardened authorization system**. They have not
+>   been audited, fuzzed, or hostile-tested. Assume they can be bypassed.
+> - There is **no authentication, no authorization, no TLS, no rate limiting,
+>   and no audit trail** for clients of the proxy.
+> - Interfaces, config format, and behavior may change without notice.
+>
+> Use it on your own machine, bound to loopback, for your own repos, and assume
+> that anything that goes wrong is your problem. **No warranty of any kind.**
+
 A tiny **read-only git proxy**. Point `git` at `http://localhost:8080/OWNER/REPO`
 and it transparently clones from GitHub, authenticating with your `gh` CLI token.
 Every repo your token can read is available; pushes are refused unless the repo
@@ -82,7 +101,35 @@ can't parse the push.
 
 ## Security
 
+**Read this as a list of known weaknesses, not as a set of guarantees.**
+
 - **Bind to loopback.** A public bind shares your token's read access with anyone
-  who can reach the port.
+  who can reach the port — unauthenticated. There is no client auth of any kind.
+- **No TLS.** Traffic between git and the proxy is plaintext HTTP.
+- **The token is broad.** `gh auth token` typically carries far more scope than
+  this proxy needs. The proxy cannot narrow it; it only chooses which requests to
+  forward.
+- **Allowlists are filters, not a sandbox.** `read_allow`, `write_allow`, and
+  `[write_policy]` are pattern matches over request paths and parsed pack data.
+  They are unaudited, have limited test coverage against adversarial input, and
+  should not be treated as a security boundary.
+- **Push parsing is heuristic.** Ref-level policy depends on parsing the
+  `git-receive-pack` request. It fails closed when it cannot parse, but a parser
+  that is wrong in an unexpected way is a real possibility.
 - The proxy never forwards a client's `Authorization`; it always supplies its own.
 - Keep `write_allow` as small as you mean it.
+
+If you find a security problem: this project makes no commitment to fix it. Do
+not deploy it anywhere that matters.
+
+## Disclaimer of warranty
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY — INCLUDING
+LEAKED CREDENTIALS, LOST OR CORRUPTED REPOSITORY DATA, OR UNAUTHORIZED ACCESS —
+WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+You run it at your own risk.

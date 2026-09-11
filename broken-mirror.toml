@@ -1,5 +1,14 @@
 # broken-mirror configuration.
 #
+# ##########################################################################
+# #  EXPERIMENTAL SOFTWARE - NOT FOR PRODUCTION USE.                       #
+# #  This proxy has no client authentication and no TLS, and it holds a    #
+# #  GitHub token with all of your read access. The allowlists below are   #
+# #  best-effort filters, NOT an audited security boundary - assume they   #
+# #  can be bypassed. Bind to loopback only. Provided AS IS, WITHOUT       #
+# #  WARRANTY OF ANY KIND; you run it entirely at your own risk.           #
+# ##########################################################################
+#
 # Loaded from ./broken-mirror.toml by default, or from the path given to --config.
 # CLI flags (--addr, --upstream, --token) override the matching values here.
 
